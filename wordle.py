@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Dict, List, Set, Optional, Tuple
 from itertools import product
 from tqdm import tqdm
+import multiprocessing as mp
 
 
 LENGTH = 5
@@ -118,22 +119,42 @@ class GameInfo:
 
         return GameInfo(new_words, new_hints)
 
-    def suggest_guess(self) -> str:
-        return min(
-            tqdm(self.words),
-            key=lambda word: max(
-                len(self.apply_hints(Hint.parse_guess(word, guess_result)).words)
-                for guess_result in POSSIBLE_GUESS_RESULTS
-            ),
+    @classmethod
+    def apply_hypo_hint(
+        cls, curr_hints: Dict[str, Hint], curr_words: Set[str], guess: Dict[str, Hint]
+    ) -> int:
+        new_hints = Hint.merge_hints(curr_hints, guess)
+        for letter, hint in new_hints.items():
+            curr_words = {w for w in curr_words if hint.check_word(letter, w)}
+        return len(curr_words)
+
+    @classmethod
+    def hypo_worst_hint(
+        cls, payload: Tuple[Dict[str, Hint], Set[str], str]
+    ) -> Tuple[str, int]:
+        curr_hints, curr_words, word = payload
+        return word, max(
+            cls.apply_hypo_hint(
+                curr_hints, curr_words, Hint.parse_guess(word, guess_result)
+            )
+            for guess_result in POSSIBLE_GUESS_RESULTS
         )
+
+    def suggest_guess(self) -> str:
+        payloads = [(self.hints, self.words, word) for word in CORPUS]
+        return min(
+            pool.imap_unordered(GameInfo.hypo_worst_hint, tqdm(payloads), 4),
+            key=lambda r: (r[1], -(r[0] in self.words), r[0]),
+        )[0]
 
 
 if __name__ == "__main__":
     game_info = GameInfo(CORPUS, {})
-    word = 'soare'
+    pool = mp.Pool(mp.cpu_count())
+    word = "soare"
 
     while True:
-        print('Try:', word)
+        print("Try:", word)
         colors = input("Enter colors > ")
         guess = Hint.parse_guess(word, colors)
         game_info = game_info.apply_hints(guess)
